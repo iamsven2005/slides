@@ -2,3 +2,6 @@ Flask
 psycopg2-binary
 flask_cors
 load_dotenv
+flask-socketio
+eventlet
+sqlachemy

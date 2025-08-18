@@ -1,1 +1,621 @@
-<!DOCTYPE html><html><head><title>Modern Trello Board</title><style>body {font-family: sans-serif;padding: 2rem;margin: 0;box-sizing: border-box;}#todoArea {display: none;}#board {display: flex;flex-wrap: wrap;gap: 1rem;margin-top: 1rem;justify-content: center;}.column {background: #f0f0f0;padding: 1rem;border-radius: 5px;width: 100%;max-width: 280px;box-sizing: border-box;display: flex;flex-direction: column;}.column h4 {margin-top: 0;display: flex;justify-content: space-between;align-items: center;flex-wrap: wrap;}.task-list {list-style: none;padding: 0;margin: 0;}li {background: #fff;margin-bottom: 0.5rem;padding: 0.5rem;border-radius: 4px;box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);display: flex;justify-content: space-between;align-items: center;flex-wrap: wrap;}.task-controls {display: flex;flex-wrap: wrap;gap: 4px;}input,button {padding: 6px 12px;margin: 4px 2px;border-radius: 20px;font-size: 14px;border: 1px solid #ccc;}input[type="text"] {flex-grow: 1;max-width: 100%;min-width: 0;}.controls-section {display: flex;flex-wrap: wrap;gap: 0.5rem;margin-bottom: 1rem;justify-content: center;}#loginArea {display: flex;flex-direction: column;align-items: center;justify-content: center;min-height: 80vh;padding: 1rem;}.logout-section {display: flex;justify-content: center;margin-top: 1rem;}#toast {position: fixed;bottom: 20px;right: 20px;background: #333;color: #fff;padding: 10px 16px;border-radius: 8px;box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);display: none;z-index: 999;font-size: 14px;}@media (max-width: 600px) {.column {max-width: 100%;}input,button {font-size: 13px;padding: 6px 10px;}.controls-section {flex-direction: column;align-items: stretch;}.task-controls {justify-content: flex-end;}}</style></head><body><div id="toast" style="position: fixed;bottom: 20px;right: 20px;background: #333;color: #fff;padding: 10px 16px;border-radius: 8px;box-shadow: 0 2px 6px rgba(0,0,0,0.3);display: none;z-index: 999;font-size: 14px;"></div><div id="loginArea"><h3>Welcome Back</h3><input id="username" placeholder="Enter your username"><button onclick="login()">Sign In</button></div><div id="todoArea"><h3>Your Project Board</h3><div><input id="taskInput" placeholder="Add a new task..."><button onclick="addTask()">Add Task</button><input id="searchInput" placeholder="Search tasks..." oninput="filterTasks()"><input id="columnNameInput" placeholder="New column name..."><button class="add-column-btn" onclick="addColumn()">➕ Add Column</button></div><div id="searchResults"></div><div id="board"></div><div class="logout-section"><button onclick="logout()">Sign Out</button></div></div><script>let allTasks = [];let currentColumnId = null;async function login() {const username = document.getElementById('username').value;await fetch('/login', {method: 'POST',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({ username })});showToast('Logged in successfully');document.getElementById('loginArea').style.display = 'none';document.getElementById('todoArea').style.display = 'block';loadBoard();}async function logout() {await fetch('/logout');showToast('Logged out');document.getElementById('loginArea').style.display = 'flex';document.getElementById('todoArea').style.display = 'none';allTasks = [];}async function addTask() {const task = document.getElementById('taskInput').value;if (!task.trim()) return;await fetch('/add', {method: 'POST',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({ task })});showToast('Added');document.getElementById('taskInput').value = '';loadBoard();}async function deleteTask(id) {await fetch(`/delete/${id}`, { method: 'DELETE' });showToast('Deleted');loadBoard();}async function editTask(id, newTask) {await fetch(`/edit/${id}`, {method: 'PUT',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({ task: newTask })});showToast('Task edited');loadBoard();}async function moveTask(taskId, toColumnId, newPosition) {await fetch('/move', {method: 'POST',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({task_id: taskId,to_column_id: toColumnId,new_position: newPosition})});showToast('Shifted Task');loadBoard();}async function addColumn() {const name = document.getElementById('columnNameInput').value;if (!name.trim()) return;await fetch('/column', {method: 'POST',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({ name })});showToast('Added Column');document.getElementById('columnNameInput').value = '';loadBoard();}async function deleteColumn(id) {await fetch(`/column/${id}`, { method: 'DELETE' });loadBoard();}async function loadBoard() {const res = await fetch('/board');const board = await res.json();const boardDiv = document.getElementById('board');boardDiv.innerHTML = '';board.forEach(col => {const colDiv = document.createElement('div');colDiv.className = 'column';colDiv.dataset.columnId = col.id;const nameSpan = document.createElement('span');nameSpan.textContent = col.name;const nameInput = document.createElement('input');nameInput.type = 'text';nameInput.value = col.name;nameInput.style.display = 'none';const saveBtn = document.createElement('button');saveBtn.textContent = '💾';saveBtn.style.display = 'none';saveBtn.onclick = () => {renameColumn(col.id, nameInput.value);};const editBtn = document.createElement('button');editBtn.textContent = '✏️';editBtn.onclick = () => {nameSpan.style.display = 'none';nameInput.style.display = 'inline';saveBtn.style.display = 'inline';editBtn.style.display = 'none';};const duplicateBtn = document.createElement('button');duplicateBtn.textContent = '📄';duplicateBtn.onclick = () => duplicateColumn(col.id);const deleteBtn = document.createElement('button');deleteBtn.textContent = '🗑️';deleteBtn.onclick = () => deleteColumn(col.id);const title = document.createElement('h4');title.appendChild(nameSpan);title.appendChild(nameInput);title.appendChild(saveBtn);title.appendChild(editBtn);title.appendChild(duplicateBtn);title.appendChild(deleteBtn);colDiv.appendChild(title);const ul = document.createElement('ul');ul.className = 'task-list';ul.dataset.columnId = col.id;col.tasks.forEach(task => {const li = document.createElement('li');const span = document.createElement('span');span.textContent = task.task;span.style.flexGrow = '1';const input = document.createElement('input');input.type = 'text';input.value = task.task;input.style.display = 'none';const saveBtn = document.createElement('button');saveBtn.textContent = '💾';saveBtn.style.display = 'none';saveBtn.onclick = () => {editTask(task.id, input.value);};const editBtn = document.createElement('button');editBtn.textContent = '✏️';editBtn.onclick = () => {span.style.display = 'none';input.style.display = 'inline';saveBtn.style.display = 'inline';editBtn.style.display = 'none';};const deleteBtn = document.createElement('button');deleteBtn.textContent = '🗑️';deleteBtn.onclick = () => {deleteTask(task.id);};const controlDiv = document.createElement('div');controlDiv.className = 'task-controls';controlDiv.appendChild(input);controlDiv.appendChild(saveBtn);controlDiv.appendChild(editBtn);controlDiv.appendChild(deleteBtn);const leftBtn = document.createElement('button');leftBtn.textContent = '⬅️';leftBtn.onclick = () => moveTaskLeft(task.id, col.id);const rightBtn = document.createElement('button');rightBtn.textContent = '➡️';rightBtn.onclick = () => moveTaskRight(task.id, col.id);controlDiv.appendChild(leftBtn);controlDiv.appendChild(rightBtn);li.appendChild(span);li.appendChild(controlDiv);ul.appendChild(li);});colDiv.appendChild(ul);boardDiv.appendChild(colDiv);});}function getColumnIndex(columns, columnId) {return columns.findIndex(col => col.id === columnId);}async function moveTaskLeft(taskId, currentColumnId) {const res = await fetch('/board');const board = await res.json();const index = getColumnIndex(board, currentColumnId);if (index > 0) {const newColumn = board[index - 1];await moveTask(taskId, newColumn.id, 999);}}async function moveTaskRight(taskId, currentColumnId) {const res = await fetch('/board');const board = await res.json();const index = getColumnIndex(board, currentColumnId);if (index < board.length - 1) {const newColumn = board[index + 1];await moveTask(taskId, newColumn.id, 999);}}function filterTasks() {const query = document.getElementById('searchInput').value.toLowerCase();const boardDiv = document.getElementById('board');const resultsDiv = document.getElementById('searchResults');if (query.trim() === '') {resultsDiv.innerHTML = '';boardDiv.style.display = 'flex';return;}boardDiv.style.display = 'none';resultsDiv.innerHTML = `<h4>Search Results for "${query}"</h4>`;const columns = document.querySelectorAll('.column');let found = 0;columns.forEach(col => {const colName = col.querySelector('h4 span').textContent;const tasks = col.querySelectorAll('.task-list li');tasks.forEach(taskEl => {const taskText = taskEl.querySelector('span').textContent;if (taskText.toLowerCase().includes(query)) {const result = document.createElement('div');result.textContent = `📌 ${taskText} (in "${colName}")`;resultsDiv.appendChild(result);found++;}});});if (found === 0) {resultsDiv.innerHTML += `<p>No matching tasks found.</p>`;}}const eventSource = new EventSource("/events");eventSource.onmessage = function (event) {loadBoard();};async function duplicateColumn(id) {await fetch(`/column/${id}/duplicate`, {method: 'POST'});loadBoard();}async function renameColumn(id, newName) {if (!newName.trim()) return;await fetch(`/column/${id}`, {method: 'PUT',headers: { 'Content-Type': 'application/json' },body: JSON.stringify({ name: newName })});loadBoard();}function showToast(message) {const toast = document.getElementById('toast');toast.textContent = message;toast.style.display = 'block';setTimeout(() => {toast.style.display = 'none';}, 2500);}</script></body></html>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Slides</title>
+  <style>
+    :root{ --bg:#0b0f1a; --panel:#0f1626; --ink:#eef2f8; --muted:#a9b4c7; --accent:#6ea8fe; --border:#22304a; }
+    *{ box-sizing:border-box }
+    html,body{ height:100% }
+    body{ margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    .app{ display:grid; grid-template-columns: 300px 1fr; height:100vh; }
+    .side{ border-right:1px solid var(--border); background:var(--panel); display:flex; flex-direction:column; min-width:0; }
+    .side header{ padding:12px; border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center; }
+    .title{ background:#0d1322; border:1px solid var(--border); color:var(--ink); border-radius:10px; padding:6px 10px; outline:none; width:100%; font-weight:600; }
+    .slides{ overflow:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+    .slide-item{ display:flex; align-items:center; gap:8px; padding:8px; border:1px solid var(--border); background:#0d1322; border-radius:12px; cursor:pointer; user-select:none; }
+    .slide-item.active{ outline:2px solid var(--accent); }
+    .slide-item .n{ width:26px; height:26px; border-radius:8px; background:#121a2d; display:grid; place-items:center; color:var(--muted); font-size:12px; }
+    .slide-item input{ flex:1; background:transparent; border:none; color:var(--ink); font-weight:600; outline:none; min-width:0; }
+    .btn{ border:1px solid var(--border); background:#0d1322; color:var(--ink); padding:8px 10px; border-radius:10px; cursor:pointer; }
+    .btn:hover{ background:#121a2d; }
+    .grow{ flex:1 }
+
+    .main{ display:grid; grid-template-rows: 52px 1fr 40px; height:100vh; min-width:0; }
+    .toolbar{ border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--panel); flex-wrap:wrap; }
+    .toolbar .right{ margin-left:auto; color:var(--muted); font-size:12px; display:flex; gap:12px; align-items:center;}
+    .stage-wrap{ overflow:auto; display:grid; place-items:center; padding:16px; }
+    .stage{
+      width: 960px; height: 540px; background:white; color:#111;
+      border-radius:20px; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      position: relative; overflow: hidden; display: block; user-select:none;
+    }
+    .obj{ position:absolute; }
+    .selected { outline:2px solid rgba(110,168,254,.9); outline-offset:0; }
+    .handle{ box-shadow:0 0 0 2px rgba(110,168,254,.9); background:#fff; }
+    .marquee{
+      position:absolute; border:1px dashed #6ea8fe; background:rgba(110,168,254,.15); pointer-events:none;
+    }
+
+    .footer{ border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--panel); color:var(--muted); font-size:12px; }
+
+    /* inputs */
+    .small{ height:32px; padding:6px 8px; border-radius:8px; border:1px solid var(--border); background:#0d1322; color:var(--ink); outline:none; }
+    .label{ color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <header>
+        <input id="deckTitle" class="title" value="Untitled deck" />
+      </header>
+      <div class="slides" id="slides"></div>
+      <div style="padding:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="addSlide">+ Add</button>
+        <button class="btn" id="delSlide">Delete</button>
+        <button class="btn" id="dupe">Duplicate</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="toolbar">
+        <button id="tool-select"  class="btn">Select</button>
+        <button id="tool-rect"    class="btn">Rect</button>
+        <button id="tool-ellipse" class="btn">Ellipse</button>
+        <button id="tool-text"    class="btn">Text</button>
+
+        <span class="label">BG</span>
+        <input id="bg-color" type="color" class="small"/>
+
+        <span class="label">Color</span>
+        <input id="color" type="color" class="small" value="#111111"/>
+
+        <span class="label">Font size</span>
+        <input id="fontSize" type="number" class="small" min="8" max="200" step="1" value="32" style="width:80px"/>
+
+        <div class="right">
+          <button class="btn" id="undoBtn">Undo</button>
+          <button class="btn" id="redoBtn">Redo</button>
+          <span id="saveState">Idle</span>
+        </div>
+      </div>
+
+      <div class="stage-wrap"><div class="stage" id="stage"></div></div>
+      <div class="footer">
+        <span>Share this URL to collaborate: <code id="url"></code></span>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script>
+    // ---------------------- Utilities ----------------------
+    const $ = (s, r=document) => r.querySelector(s);
+    const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+    const uuidv4 = () => ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));
+    const debounce = (fn, ms=400) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); } };
+    const deckId = new URL(location.href).searchParams.get('deck');
+    $('#url').textContent = location.href;
+
+    // ---------------------- Client State ----------------------
+    let deck = { id: deckId, title: 'Untitled deck', slides: [] };
+    let currentIndex = 0;
+    let isApplyingRemote = false;
+    let selection = [];
+    let dragState = null;
+    let creatingObj = null;
+    let marquee = null;
+    let lastMouse = {x: 200, y: 150}; // for paste positioning
+
+    // Undo/Redo history
+    let history = [], historyIndex = -1;
+    const MAX_HISTORY = 100;
+    const clone = (x)=> JSON.parse(JSON.stringify(x));
+    function pushHistory(){
+      if (isApplyingRemote) return;
+      const snap = clone(deck);
+      const prev = history[historyIndex];
+      if (prev && JSON.stringify(prev) === JSON.stringify(snap)) return;
+      history = history.slice(0, historyIndex+1);
+      history.push(snap);
+      if (history.length > MAX_HISTORY) history.shift();
+      historyIndex = history.length - 1;
+    }
+    function applyState(snap){
+      deck = clone(snap);
+      selection = [];
+      renderAll();
+      postSave();
+    }
+    function undo(){ if (historyIndex > 0){ historyIndex--; applyState(history[historyIndex]); } }
+    function redo(){ if (historyIndex < history.length - 1){ historyIndex++; applyState(history[historyIndex]); } }
+const undoBtn = document.getElementById('undoBtn');
+const redoBtn = document.getElementById('redoBtn');
+
+function updateUndoRedoUI(){
+  if (!undoBtn || !redoBtn) return;
+  undoBtn.disabled = historyIndex <= 0;
+  redoBtn.disabled = historyIndex >= history.length - 1;
+}
+
+undoBtn.addEventListener('click', (e)=>{ e.preventDefault(); undo(); updateUndoRedoUI(); });
+redoBtn.addEventListener('click', (e)=>{ e.preventDefault(); redo(); updateUndoRedoUI(); });
+
+// call this whenever history changes or a state is applied:
+const _pushHistory = pushHistory;
+pushHistory = function(...args){
+  _pushHistory.apply(this, args);
+  updateUndoRedoUI();
+};
+
+const _applyState = applyState;
+applyState = function(...args){
+  _applyState.apply(this, args);
+  updateUndoRedoUI();
+};
+
+// on first load:
+updateUndoRedoUI();
+el.addEventListener('input', ()=>{
+  o.text = el.innerText;
+  postSave();                 // live-save as you type
+});
+el.addEventListener('blur', ()=>{
+  o.text = el.innerText;
+  pushHistory();              // one undo step when leaving the text box
+  postSave();
+});
+    // ---------------------- Socket ----------------------
+    const socket = io();
+    socket.on('connect', ()=> { socket.emit('join_deck', { deck_id: deckId }); });
+    socket.on('deck_state', (serverDeck)=>{
+      isApplyingRemote = true;
+      deck = serverDeck;
+      history = []; historyIndex = -1;
+      pushHistory();
+      renderAll();
+      setTimeout(()=> isApplyingRemote = false, 0);
+      setSaved('Synced');
+    });
+
+    // ---------------------- Helpers ----------------------
+    function currentSlide(){ return deck.slides[currentIndex]; }
+    function ensureSlide(){
+      if (!deck.slides.length){
+        deck.slides.push({ id: uuidv4(), title:'Slide 1', background:'#ffffff', objects:[] });
+      }
+    }
+    function setSaving(){ $('#saveState').textContent = 'Saving…'; }
+    function setSaved(msg){ $('#saveState').textContent = msg || 'Saved'; }
+
+    const postSave = debounce(()=>{
+      if (isApplyingRemote) return;
+      setSaving();
+      socket.emit('content_update', { deck_id: deck.id, title: deck.title, slides: deck.slides });
+      setSaved('Saved');
+    }, 250);
+
+    // ---------------------- Tooling ----------------------
+    let tool = 'select';
+    const toolButtons = {
+      select: $('#tool-select'),
+      rect:   $('#tool-rect'),
+      ellipse:$('#tool-ellipse'),
+      text:   $('#tool-text')
+    };
+    Object.entries(toolButtons).forEach(([k,btn])=> btn.onclick = ()=> setTool(k));
+    function setTool(next){
+      tool = next;
+      Object.entries(toolButtons).forEach(([k,btn]) => btn.classList.toggle('active', k===tool));
+    }
+    setTool('select');
+
+    // Inspector controls
+    const bgInput = $('#bg-color');
+    const colorInput = $('#color');
+    const fontInput = $('#fontSize');
+
+    bgInput.addEventListener('input', (e)=>{
+      currentSlide().background = e.target.value;
+      renderCanvas(); pushHistory(); postSave();
+    });
+
+    colorInput.addEventListener('input', (e)=>{
+      if (!selection.length) return;
+      const slide = currentSlide();
+      const val = e.target.value;
+      selection.forEach(id=>{
+        const o = slide.objects.find(oo=>oo.id===id);
+        if (!o) return;
+        if (o.type === 'text') o.color = val; else if (o.type !== 'image') o.fill = val;
+      });
+      renderCanvas(); /* preview */ postSave();
+    });
+    colorInput.addEventListener('change', ()=>{ pushHistory(); });
+
+    // Font size: apply live on input, add to history on change/blur
+    function setFontSize(px){
+      const slide = currentSlide(); let changed = false;
+      selection.forEach(id=>{
+        const o = slide.objects.find(oo=>oo.id===id);
+        if (o && o.type === 'text'){ o.fontSize = px; changed = true; }
+      });
+      if (changed){ renderCanvas(); postSave(); }
+    }
+    fontInput.addEventListener('input', (e)=>{
+      const size = clampInt(e.target.value, 8, 200, 32);
+      setFontSize(size);
+    });
+    fontInput.addEventListener('change', (e)=>{
+      const size = clampInt(e.target.value, 8, 200, 32);
+      setFontSize(size); pushHistory();
+    });
+
+    function clampInt(v, min, max, fallback){
+      const n = parseInt(v, 10); if (Number.isFinite(n)) return Math.max(min, Math.min(max, n));
+      return fallback;
+    }
+
+    function updateInspector(){
+      const slide = currentSlide();
+      const first = slide.objects.find(o=> selection.includes(o.id));
+      bgInput.value = slide.background || '#ffffff';
+      if (first){
+        const c = first.type === 'text' ? (first.color || '#111111') :
+                  (first.type === 'image' ? '#111111' : (first.fill || '#8b5cf6'));
+        colorInput.value = c;
+        fontInput.disabled = first.type !== 'text';
+        if (first.type === 'text') fontInput.value = first.fontSize || 24;
+      } else {
+        fontInput.disabled = true;
+      }
+    }
+
+    // ---------------------- Stage Rendering ----------------------
+    const stage = $('#stage');
+
+    stage.addEventListener('mousedown', (e)=>{
+      const rect = stage.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      lastMouse = {x,y};
+
+      if (e.target === stage && tool === 'select'){
+        marquee = { x0:x, y0:y, x1:x, y1:y };
+        renderCanvas();
+        return;
+      }
+
+      if (tool !== 'select' && e.target === stage){
+        creatingObj = {
+          id: uuidv4(), type: tool, x, y, width: 1, height: 1,
+          fill: tool==='text' ? 'transparent' : '#8b5cf6',
+          stroke: '#0f172a', rotation: 0,
+          text: tool==='text' ? 'Text' : undefined,
+          fontSize: 24, fontFamily: 'system-ui, Segoe UI, Roboto, sans-serif',
+          color: '#111111'
+        };
+        renderCanvas();
+      }
+    });
+
+    window.addEventListener('mousemove', (e)=>{
+      const rect = stage.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      lastMouse = {x,y};
+
+      if (creatingObj){
+        creatingObj.width  = (x - creatingObj.x);
+        creatingObj.height = (y - creatingObj.y);
+        renderCanvas();
+      }
+      if (dragState){
+        const slide = currentSlide();
+        dragState.ids.forEach(id=>{
+          const o = slide.objects.find(oo=>oo.id===id);
+          const off = dragState.offsets[id];
+          o.x = x - off.dx; o.y = y - off.dy;
+        });
+        renderCanvas();
+      }
+      if (marquee){
+        marquee.x1 = x; marquee.y1 = y;
+        renderCanvas();
+      }
+    });
+
+    window.addEventListener('mouseup', ()=>{
+      if (creatingObj){
+        const slide = currentSlide();
+        if (creatingObj.width < 0){ creatingObj.x += creatingObj.width; creatingObj.width = Math.abs(creatingObj.width); }
+        if (creatingObj.height < 0){ creatingObj.y += creatingObj.height; creatingObj.height = Math.abs(creatingObj.height); }
+        slide.objects.push(creatingObj);
+        selection = [creatingObj.id];
+        renderCanvas(); pushHistory(); postSave();
+        if (creatingObj.type === 'text'){
+          setTimeout(()=>{ const el = document.getElementById('obj-'+creatingObj.id); if (el){ el.focus(); selectAllText(el); } }, 0);
+        }
+        creatingObj = null;
+      }
+      if (dragState){ pushHistory(); postSave(); dragState = null; }
+      if (marquee){
+        const slide = currentSlide();
+        const box = normRect(marquee);
+        selection = slide.objects.filter(o=> intersects(box, {x:o.x, y:o.y, width:o.width, height:o.height}) ).map(o=>o.id);
+        marquee = null; renderCanvas(); updateInspector();
+      }
+    });
+
+    function normRect(r){ const x = Math.min(r.x0, r.x1), y = Math.min(r.y0, r.y1); return {x, y, width: Math.abs(r.x1-r.x0), height: Math.abs(r.y1-r.y0)}; }
+    function intersects(a, b){ return !(a.x > b.x + b.width || a.x + a.width < b.x || a.y > b.y + b.height || a.y + a.height < b.y); }
+    function selectAllText(el){ const range = document.createRange(); range.selectNodeContents(el); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+
+    function renderCanvas(){
+      ensureSlide();
+      const slide = currentSlide();
+      stage.style.background = slide.background || '#ffffff';
+      stage.innerHTML = '';
+
+      slide.objects.forEach(o=>{
+        const el = document.createElement('div');
+        el.id = 'obj-'+o.id;
+        el.className = 'obj' + (selection.includes(o.id) ? ' selected' : '');
+        el.style.left = o.x + 'px';
+        el.style.top = o.y + 'px';
+        el.style.width = o.width + 'px';
+        el.style.height = o.height + 'px';
+        el.style.transform = `rotate(${o.rotation||0}deg)`;
+
+        if (o.type === 'rect'){
+          el.style.background = o.fill || '#ddd';
+          el.style.border = '1px solid ' + (o.stroke || 'transparent');
+        } else if (o.type === 'ellipse'){
+          el.style.background = o.fill || '#ddd';
+          el.style.border = '1px solid ' + (o.stroke || 'transparent');
+          el.style.borderRadius = '999px';
+        } else if (o.type === 'text'){
+          el.contentEditable = true;
+          el.style.display='flex';
+          el.style.alignItems='center';
+          el.style.justifyContent='center';
+          el.style.textAlign='center';
+          el.style.padding='4px';
+          el.style.color = o.color || '#111111';
+          el.style.fontSize = (o.fontSize||24)+'px';
+          el.style.fontFamily = o.fontFamily || 'system-ui, Segoe UI, Roboto, sans-serif';
+          el.innerText = o.text || '';
+          el.addEventListener('input', ()=>{ o.text = el.innerText; postSave(); });
+          el.addEventListener('dblclick', ()=> { el.focus(); selectAllText(el); });
+        } else if (o.type === 'image'){
+          const img = new Image();
+          img.src = o.dataUrl;         // base64 data URL
+          img.draggable = false;
+          img.style.width = '100%';
+          img.style.height = '100%';
+          img.style.objectFit = 'contain';
+          el.appendChild(img);
+        }
+
+        // select/drag
+        el.onmousedown = (e)=>{
+          if (tool !== 'select') return;
+          e.stopPropagation();
+          const already = selection.includes(o.id);
+          if (e.shiftKey) selection = already ? selection.filter(id=>id!==o.id) : [...selection, o.id];
+          else selection = already ? selection : [o.id];
+
+          const rect = stage.getBoundingClientRect();
+          const x = e.clientX - rect.left, y = e.clientY - rect.top;
+          const ids = selection.slice();
+          const offsets = {};
+          ids.forEach(id=>{
+            const obj = slide.objects.find(oo=>oo.id===id);
+            offsets[id] = { dx: x - obj.x, dy: y - obj.y };
+          });
+          dragState = { ids, offsets };
+          updateInspector();
+          renderCanvas();
+        };
+
+        // resize handle
+        if (selection.includes(o.id)){
+          const h = document.createElement('div');
+          h.className = 'handle';
+          h.style.position = 'absolute';
+          h.style.right = '-6px'; h.style.bottom = '-6px';
+          h.style.width = '12px'; h.style.height = '12px';
+          h.style.cursor = 'se-resize';
+          h.onmousedown = (e)=>{
+            e.stopPropagation();
+            const rect = stage.getBoundingClientRect();
+            const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+            const sw = o.width, sh = o.height;
+            const move = (ev)=>{
+              const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+              o.width = Math.max(5, sw + (x - sx));
+              o.height = Math.max(5, sh + (y - sy));
+              renderCanvas();
+            };
+            const up = ()=>{
+              window.removeEventListener('mousemove', move);
+              window.removeEventListener('mouseup', up);
+              pushHistory(); postSave();
+            };
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+          };
+          el.appendChild(h);
+        }
+
+        stage.appendChild(el);
+      });
+
+      if (marquee){
+        const m = normRect(marquee);
+        const mx = document.createElement('div');
+        mx.className = 'marquee';
+        mx.style.left = m.x + 'px';
+        mx.style.top = m.y + 'px';
+        mx.style.width = m.width + 'px';
+        mx.style.height = m.height + 'px';
+        stage.appendChild(mx);
+      }
+    }
+
+    // ---------------------- Slides list ----------------------
+    function renderSlidesList(){
+      const cont = $('#slides');
+      cont.innerHTML = '';
+      deck.slides.forEach((s, i)=>{
+        const row = document.createElement('div');
+        row.className = 'slide-item' + (i===currentIndex ? ' active' : '');
+        row.onclick = ()=>{ currentIndex = i; selection=[]; renderAll(); };
+
+        const num = document.createElement('div'); num.className = 'n'; num.textContent = i+1;
+
+        const name = document.createElement('input');
+        name.value = s.title || `Slide ${i+1}`;
+        name.onmousedown = ev=>ev.stopPropagation();
+        name.oninput = ()=>{ s.title = name.value; pushHistory(); postSave(); };
+
+        const dup = document.createElement('button'); dup.textContent = '⎘'; dup.title='Duplicate'; dup.className='btn';
+        dup.onclick = (ev)=>{ ev.stopPropagation();
+          const copy = JSON.parse(JSON.stringify(s));
+          copy.id = uuidv4();
+          copy.title = (s.title||`Slide ${i+1}`)+' (copy)';
+          if (Array.isArray(copy.objects)) copy.objects.forEach(o=>o.id = uuidv4());
+          deck.slides.splice(i+1,0,copy);
+          currentIndex = i+1; pushHistory(); renderAll(); postSave();
+        };
+
+        const del = document.createElement('button'); del.textContent = '🗑'; del.title='Delete'; del.className='btn';
+        del.onclick = (ev)=>{ ev.stopPropagation();
+          if (deck.slides.length===1) return;
+          deck.slides.splice(i,1);
+          currentIndex = Math.max(0, Math.min(currentIndex, deck.slides.length-1));
+          pushHistory(); renderAll(); postSave();
+        };
+
+        row.appendChild(num);
+        row.appendChild(name);
+        row.appendChild(dup);
+        row.appendChild(del);
+        cont.appendChild(row);
+      });
+    }
+
+    function renderAll(){
+      $('#deckTitle').value = deck.title || 'Untitled deck';
+      if (currentIndex >= deck.slides.length) currentIndex = deck.slides.length-1;
+      if (currentIndex < 0) currentIndex = 0;
+      renderSlidesList();
+      renderCanvas();
+      updateInspector();
+    }
+
+    // ---------------------- UI actions ----------------------
+    $('#deckTitle').addEventListener('input', (e)=>{ deck.title = e.target.value; pushHistory(); renderSlidesList(); postSave(); });
+    $('#addSlide').addEventListener('click', ()=>{
+      const n = deck.slides.length+1;
+      deck.slides.push({ id: uuidv4(), title: 'Slide '+n, background:'#ffffff', objects:[] });
+      currentIndex = deck.slides.length-1; pushHistory(); renderAll(); postSave();
+    });
+    $('#delSlide').addEventListener('click', ()=>{
+      if (deck.slides.length===1) return;
+      deck.slides.splice(currentIndex,1);
+      currentIndex = Math.max(0, currentIndex-1); pushHistory(); renderAll(); postSave();
+    });
+    $('#dupe').addEventListener('click', ()=>{
+      const s = deck.slides[currentIndex];
+      const copy = JSON.parse(JSON.stringify(s)); copy.id = uuidv4(); copy.title = (s.title||'Slide')+' (copy)';
+      if (Array.isArray(copy.objects)) copy.objects.forEach(o=>o.id = uuidv4());
+      deck.slides.splice(currentIndex+1,0,copy); currentIndex++; pushHistory(); renderAll(); postSave();
+    });
+
+    // Keyboard: delete/nudge/undo/redo
+    window.addEventListener('keydown', (e)=>{
+      const isMod = e.ctrlKey || e.metaKey;
+      if (isMod && e.key.toLowerCase() === 'z'){ e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+      if (isMod && e.key.toLowerCase() === 'y'){ e.preventDefault(); redo(); return; }
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selection.length){
+        const slide = currentSlide();
+        slide.objects = slide.objects.filter(o => !selection.includes(o.id));
+        selection = [];
+        renderCanvas(); pushHistory(); postSave();
+        return;
+      }
+
+      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && selection.length){
+        const slide = currentSlide();
+        const d = e.shiftKey ? 10 : 1;
+        selection.forEach(id=>{
+          const o = slide.objects.find(oo=>oo.id===id);
+          if (!o) return;
+          if (e.key==='ArrowUp') o.y -= d;
+          if (e.key==='ArrowDown') o.y += d;
+          if (e.key==='ArrowLeft') o.x -= d;
+          if (e.key==='ArrowRight') o.x += d;
+        });
+        renderCanvas(); pushHistory(); postSave();
+      }
+    });
+
+    // ---------------------- Images: Paste & Drag/Drop ----------------------
+    stage.addEventListener('paste', (e)=>{
+      const items = (e.clipboardData || window.clipboardData)?.items || [];
+      for (const it of items){
+        if (it.type && it.type.indexOf('image') === 0){
+          const file = it.getAsFile();
+          if (file) { e.preventDefault(); handleImageFile(file, lastMouse.x, lastMouse.y); }
+        }
+      }
+    });
+
+    stage.addEventListener('dragover', (e)=>{ e.preventDefault(); });
+    stage.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      const rect = stage.getBoundingClientRect();
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      const files = e.dataTransfer.files || [];
+      for (const file of files){
+        if (file.type && file.type.startsWith('image/')){
+          handleImageFile(file, x, y);
+        }
+      }
+    });
+
+    function handleImageFile(file, x, y){
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        const dataUrl = reader.result; // base64
+        const img = new Image();
+        img.onload = ()=>{
+          const maxW = 600, maxH = 400;
+          let w = img.naturalWidth, h = img.naturalHeight;
+          const scale = Math.min(1, maxW / w, maxH / h);
+          w = Math.max(40, Math.round(w * scale));
+          h = Math.max(40, Math.round(h * scale));
+          const slide = currentSlide();
+          const o = {
+            id: uuidv4(), type: 'image',
+            x: Math.max(0, Math.min((x||200) - w/2, 960 - w)),
+            y: Math.max(0, Math.min((y||150) - h/2, 540 - h)),
+            width: w, height: h, rotation: 0,
+            dataUrl: dataUrl,
+          };
+          slide.objects.push(o);
+          selection = [o.id];
+          renderCanvas(); pushHistory(); postSave();
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Initial render
+    renderAll();
+  </script>
+</body>
+</html>

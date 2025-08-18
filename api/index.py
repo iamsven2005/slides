@@ -1,236 +1,204 @@
-from flask import Flask, request, jsonify, session, Response, render_template
-import psycopg2
-from flask_cors import CORS
+# index.py
+from __future__ import annotations
+import json
 import os
-import time
-import threading
+import uuid
+from datetime import datetime, timezone
+
+# --- Patch eventlet BEFORE importing Flask/Werkzeug (optional on Windows) ---
+async_mode = "threading"
+try:
+    import eventlet  # type: ignore
+    eventlet.monkey_patch()
+    async_mode = "eventlet"
+except Exception:
+    eventlet = None
+
+from flask import Flask, request, redirect, url_for, render_template_string, jsonify, abort, render_template
+from flask_socketio import SocketIO, join_room, emit
+from sqlalchemy import create_engine, text, bindparam
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.dialects.postgresql import JSONB
 from dotenv import load_dotenv
-from queue import Queue
 
 load_dotenv()
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var missing. Example: postgresql+psycopg2://user:pass@host:5432/dbname")
+
 app = Flask(__name__)
-CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode, json=json)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'fallback_secret')
-conn_str = os.environ.get('DATABASE_URL')
-
-def get_db():
-    return psycopg2.connect(conn_str)
-
-clients = []
-
-def push_update():
-    for q in clients:
-        q.put("data: update\n\n")
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/events')
-def stream():
-    def event_stream(q):
-        try:
-            while True:
-                data = q.get()
-                yield data
-        except GeneratorExit:
-            clients.remove(q)
-
-    q = Queue()
-    clients.append(q)
-    return Response(event_stream(q), mimetype="text/event-stream")
-
-@app.route('/login', methods=['POST'])
-def login():
-    username = request.json['username']
-    session['username'] = username
-    return jsonify({'status': 'ok'})
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return jsonify({'status': 'logged out'})
-
-@app.route('/add', methods=['POST'])
-def add():
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-
-    task = request.json['task']
-    username = session['username']
-
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # 1. Get the user's default column (create if not exists)
-            cur.execute("SELECT id FROM columns WHERE owner = %s ORDER BY id LIMIT 1;", (username,))
-            result = cur.fetchone()
-            if result:
-                column_id = result[0]
-            else:
-                cur.execute("INSERT INTO columns (name, owner) VALUES (%s, %s) RETURNING id;", ("To Do", username))
-                column_id = cur.fetchone()[0]
-
-            # 2. Get next position
-            cur.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM todos WHERE column_id = %s AND owner = %s;",
-                        (column_id, username))
-            position = cur.fetchone()[0]
-
-            # 3. Insert task
-            cur.execute("INSERT INTO todos (task, owner, column_id, position) VALUES (%s, %s, %s, %s);",
-                        (task, username, column_id, position))
-
-    push_update()
-    return jsonify({'status': 'ok'})
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS decks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+with engine.begin() as conn:
+    conn.execute(text(SCHEMA_SQL))
 
 
-@app.route('/list')
-def list_tasks():
-    if 'username' not in session:
-        return jsonify([])
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, task FROM todos WHERE owner = %s ORDER BY id;", (session['username'],))
-            todos = cur.fetchall()
-    return jsonify(todos)
-
-@app.route('/edit/<int:id>', methods=['PUT'])
-def edit_task(id):
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    new_task = request.json['task']
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE todos SET task = %s WHERE id = %s AND owner = %s;", (new_task, id, session['username']))
-            if cur.rowcount == 0:
-                return jsonify({'error': 'task not found or not owned by user'}), 404
-    push_update()
-    return jsonify({'status': 'updated'})
-
-@app.route('/delete/<int:id>', methods=['DELETE'])
-def delete_task(id):
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM todos WHERE id = %s AND owner = %s;", (id, session['username']))
-            if cur.rowcount == 0:
-                return jsonify({'error': 'task not found or not owned by user'}), 404
-    push_update()
-    return jsonify({'status': 'deleted'})
-@app.route('/column', methods=['POST'])
-def add_column():
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    name = request.json['name']
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO columns (name, owner) VALUES (%s, %s);", (name, session['username']))
-    push_update()
-    return jsonify({'status': 'ok'})
-
-@app.route('/column/<int:id>', methods=['DELETE'])
-def delete_column(id):
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM todos WHERE column_id = %s AND owner = %s;", (id, session['username']))
-            cur.execute("DELETE FROM columns WHERE id = %s AND owner = %s;", (id, session['username']))
-    push_update()
-    return jsonify({'status': 'deleted'})
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-@app.route('/board')
-def get_board():
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
+def strip_html(html: str) -> str:
+    import re
+    return re.sub(r"<[^>]+>", "", html or "").strip()
 
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, name FROM columns WHERE owner = %s ORDER BY id;", (session['username'],))
-            columns = cur.fetchall()
-            board = []
-            for col_id, col_name in columns:
-                cur.execute("""
-                    SELECT id, task, position FROM todos
-                    WHERE column_id = %s AND owner = %s
-                    ORDER BY position ASC;
-                """, (col_id, session['username']))
-                tasks = cur.fetchall()
-                board.append({
-                    'id': col_id,
-                    'name': col_name,
-                    'tasks': [{'id': tid, 'task': t, 'position': pos} for tid, t, pos in tasks]
-                })
-    return jsonify(board)
-@app.route('/move', methods=['POST'])
-def move_task():
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    data = request.json  # expects: {task_id, to_column_id, new_position}
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # Update task position and column
-            cur.execute("""
-                UPDATE todos
-                SET column_id = %s, position = %s
-                WHERE id = %s AND owner = %s;
-            """, (data['to_column_id'], data['new_position'], data['task_id'], session['username']))
-    push_update()
-    return jsonify({'status': 'moved'})
-@app.route('/column/<int:id>/duplicate', methods=['POST'])
-def duplicate_column(id):
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    username = session['username']
 
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # Get original column name
-            cur.execute("SELECT name FROM columns WHERE id = %s AND owner = %s;", (id, username))
-            result = cur.fetchone()
-            if not result:
-                return jsonify({'error': 'column not found'}), 404
-            original_name = result[0]
+def new_deck(deck_id: str | None = None) -> dict:
+    if deck_id is None:
+        deck_id = str(uuid.uuid4())
+    return {
+        "id": deck_id,
+        "title": "Untitled deck",
+        "slides": [
+            {
+                "id": str(uuid.uuid4()),
+                "title": "Slide 1",
+                "background": "#ffffff",
+                "objects": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "type": "text",
+                        "x": 120,
+                        "y": 120,
+                        "width": 520,
+                        "height": 70,
+                        "rotation": 0,
+                        "text": "Double-click (or select) to edit",
+                        "fontSize": 32,
+                        "fontFamily": "system-ui, Segoe UI, Roboto, sans-serif",
+                        "color": "#111111",
+                    }
+                ],
+            }
+        ],
+    }
 
-            # Create new column
-            new_name = f"{original_name} (copy)"
-            cur.execute("INSERT INTO columns (name, owner) VALUES (%s, %s) RETURNING id;", (new_name, username))
-            new_col_id = cur.fetchone()[0]
 
-            # Copy tasks
-            cur.execute("""
-                SELECT task, position FROM todos
-                WHERE column_id = %s AND owner = %s
-                ORDER BY position ASC;
-            """, (id, username))
-            tasks = cur.fetchall()
+def get_deck(deck_id: str) -> dict | None:
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT id, title, content FROM decks WHERE id=:i"), {"i": deck_id}).fetchone()
+        if not row:
+            return None
+        data = {"id": row.id, "title": row.title, **row.content}
+        for s in data.get("slides", []):
+            if "objects" not in s:
+                s["background"] = s.get("background", "#ffffff")
+                objs = []
+                for b in s.get("blocks", []):
+                    if b.get("type") == "text":
+                        objs.append({
+                            "id": str(uuid.uuid4()),
+                            "type": "text",
+                            "x": 100, "y": 100, "width": 500, "height": 80,
+                            "rotation": 0,
+                            "text": strip_html(b.get("html", "")) or "Text",
+                            "fontSize": 28,
+                            "fontFamily": "system-ui, Segoe UI, Roboto, sans-serif",
+                            "color": "#111111",
+                        })
+                s["objects"] = objs
+                s.pop("blocks", None)
+        return data
 
-            for task, pos in tasks:
-                cur.execute("""
-                    INSERT INTO todos (task, owner, column_id, position)
-                    VALUES (%s, %s, %s, %s);
-                """, (task, username, new_col_id, pos))
 
-    push_update()
-    return jsonify({'status': 'duplicated'})
-@app.route('/column/<int:id>', methods=['PUT'])
-def rename_column(id):
-    if 'username' not in session:
-        return jsonify({'error': 'unauthorized'}), 401
-    data = request.json
-    new_name = data.get('name', '').strip()
-    if not new_name:
-        return jsonify({'error': 'name required'}), 400
+def upsert_deck(deck_id: str, title: str, content: dict) -> dict:
+    payload = {"title": title, "slides": content.get("slides", [])}
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO decks (id, title, content)
+                VALUES (:i, :t, :c)
+                ON CONFLICT (id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    content = EXCLUDED.content,
+                    updated_at = NOW()
+                """
+            ).bindparams(bindparam("c", type_=JSONB())),
+            {"i": deck_id, "t": title, "c": payload},
+        )
+    return {"id": deck_id, "title": title, **payload}
 
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE columns SET name = %s
-                WHERE id = %s AND owner = %s;
-            """, (new_name, id, session['username']))
-    push_update()
-    return jsonify({'status': 'renamed'})
 
-if __name__ == '__main__':
-    app.run(debug=True, threaded=True)
+# ---------------------------- Routes ----------------------------
+@app.get("/")
+def home():
+    deck_id = request.args.get("deck")
+    if not deck_id:
+        d = new_deck()
+        upsert_deck(d["id"], d["title"], d)
+        return redirect(url_for("home", deck=d["id"]))
+    d = get_deck(deck_id)
+    if not d:
+        d = new_deck(deck_id)
+        upsert_deck(deck_id, d["title"], d)
+    return render_template("index.html", deck_id=deck_id)
+
+
+@app.get("/api/deck/<deck_id>")
+def api_get_deck(deck_id):
+    d = get_deck(deck_id)
+    if not d:
+        abort(404)
+    return jsonify(d)
+
+
+@app.post("/api/deck/<deck_id>")
+def api_update_deck(deck_id):
+    body = request.get_json(force=True)
+    title = body.get("title", "Untitled deck")
+    slides = body.get("slides", [])
+    saved = upsert_deck(deck_id, title, {"slides": slides})
+    return jsonify(saved)
+
+
+@app.get("/healthz")
+def healthz():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"ok": True}
+    except OperationalError as e:
+        return {"ok": False, "error": str(e)}, 500
+
+
+# ---------------------------- WebSocket events ----------------------------
+@socketio.on("join_deck")
+def on_join_deck(data):
+    deck_id = data.get("deck_id")
+    if not deck_id:
+        return
+    join_room(deck_id)
+    d = get_deck(deck_id)
+    if not d:
+        d = new_deck(deck_id)
+        upsert_deck(deck_id, d["title"], d)
+    emit("deck_state", d)
+
+
+@socketio.on("content_update")
+def on_content_update(data):
+    deck_id = data.get("deck_id")
+    title = data.get("title", "Untitled deck")
+    slides = data.get("slides", [])
+    if not deck_id:
+        return
+    saved = upsert_deck(deck_id, title, {"slides": slides})
+    emit("deck_state", saved, room=deck_id, include_self=False)
+
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    print(f"\nRealtime Slides running: http://localhost:{port}\n")
+    socketio.run(app, host="0.0.0.0", port=port)
