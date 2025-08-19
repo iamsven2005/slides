@@ -112,22 +112,33 @@ def get_deck(deck_id: str) -> dict | None:
 
 
 def upsert_deck(deck_id: str, title: str, content: dict) -> dict:
-    payload = {"title": title, "slides": content.get("slides", [])}
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO decks (id, title, content)
-                VALUES (:i, :t, :c)
-                ON CONFLICT (id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    content = EXCLUDED.content,
-                    updated_at = NOW()
-                """
-            ).bindparams(bindparam("c", type_=JSONB())),
-            {"i": deck_id, "t": title, "c": payload},
-        )
-    return {"id": deck_id, "title": title, **payload}
+        def _next_version() -> int:
+            with engine.begin() as conn:
+                row = conn.execute(
+                    text("SELECT (content->>'version')::int AS v FROM decks WHERE id=:i"),
+                    {"i": deck_id}
+                ).fetchone()
+            return (row.v or 0) + 1 if row else 1
+        ver = content.get("version")
+        if ver is None:
+            ver = _next_version()
+        payload = {"title": title, "slides": content.get("slides", []), "version": ver}
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO decks (id, title, content)
+                    VALUES (:i, :t, :c)
+                    ON CONFLICT (id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        content = EXCLUDED.content,
+                        updated_at = NOW()
+                    """
+                ).bindparams(bindparam("c", type_=JSONB())),
+                {"i": deck_id, "t": title, "c": payload},
+            )
+    
+        return {"id": deck_id, "title": title, **payload}
 
 
 # ---------------------------- Routes ----------------------------

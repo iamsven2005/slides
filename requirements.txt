@@ -1,7 +1,7 @@
-Flask
-psycopg2-binary
-flask_cors
-load_dotenv
-flask-socketio
-eventlet
-sqlachemy
+Flask>=3.0,<4
+Flask-Cors>=4.0,<5
+python-dotenv>=1.0,<2
+Flask-SocketIO>=5.3,<6
+eventlet>=0.33,<0.36
+SQLAlchemy>=2.0,<3
+psycopg2-binary>=2.9,<3
