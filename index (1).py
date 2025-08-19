@@ -142,13 +142,19 @@ def upsert_deck(deck_id: str, title: str, content: dict) -> dict:
 
 
 # ---------------------------- Routes ----------------------------
+
+@app.get("/new")
+def new_route():
+    d = new_deck()
+    upsert_deck(d["id"], d["title"], d)
+    return redirect(url_for("home", deck=d["id"]))
+
 @app.get("/")
 def home():
     deck_id = request.args.get("deck")
     if not deck_id:
-        d = new_deck()
-        upsert_deck(d["id"], d["title"], d)
-        return redirect(url_for("home", deck=d["id"]))
+        # Render main page that lists decks
+        return render_template("decks.html")
     d = get_deck(deck_id)
     if not d:
         d = new_deck(deck_id)
@@ -171,6 +177,17 @@ def api_update_deck(deck_id):
     slides = body.get("slides", [])
     saved = upsert_deck(deck_id, title, {"slides": slides})
     return jsonify(saved)
+
+@app.get("/api/decks")
+def api_list_decks():
+    with engine.begin() as conn:
+        rows = conn.execute(text("SELECT id, title, updated_at FROM decks ORDER BY updated_at DESC")).fetchall()
+    out = []
+    for r in rows:
+        # ISO8601 in UTC 'Z' for simple client formatting
+        ts = r.updated_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(r.updated_at, "astimezone") else None
+        out.append({"id": r.id, "title": r.title, "updated_at": ts})
+    return jsonify(out)
 
 
 @app.get("/healthz")
